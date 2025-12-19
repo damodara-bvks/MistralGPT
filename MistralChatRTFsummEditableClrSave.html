@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Mistral AI Chat</title>
+
+<style>
+body {
+    font-family: Arial;
+    background: #f2f2f2;
+}
+
+#container {
+    display: flex;
+}
+
+#left {
+    width: 220px;
+    background: #e8e8e8;
+    border-right: 1px solid #999;
+    padding: 6px;
+}
+
+#left button {
+    width: 100%;
+    margin-bottom: 6px;
+}
+
+.chat-item {
+    padding: 6px;
+    cursor: pointer;
+    border-bottom: 1px solid #ccc;
+}
+
+.chat-item:hover {
+    background: #dcdcdc;
+}
+
+#main {
+    padding: 10px;
+}
+
+#header {
+    position: relative;
+    width: 700px;
+}
+
+#tokens {
+    position: absolute;
+    top: 0;
+    right: 0;
+    font-size: 12px;
+}
+
+#toolbar button {
+    width: 32px;
+}
+
+#chat {
+    width: 700px;
+    height: 420px;
+    background: #fff;
+    border: 1px solid #999;
+    overflow-y: auto;
+    padding: 10px;
+}
+
+.msg {
+    border: 1px dashed #ccc;
+    margin: 8px 0;
+    padding: 4px;
+}
+
+.msg:focus {
+    outline: 1px solid #666;
+}
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+
+<body>
+
+<div id="container">
+
+<!-- LEFT PANEL -->
+<div id="left">
+    <button onclick="newChat()">+ New Chat</button>
+    <button onclick="saveChat()">Save Chat</button>
+    <button onclick="exportChat()">Export</button>
+    <button onclick="backupChats()">Backup</button>
+    <button onclick="restoreChats()">Restore</button>
+    <div id="chatList"></div>
+</div>
+
+<!-- MAIN -->
+<div id="main">
+
+<div id="header">
+    <h3>Mistral AI Chat</h3>
+    <div id="tokens">Tokens: 0</div>
+</div>
+
+<div id="toolbar">
+    <button onclick="cmd('bold')"><b>B</b></button>
+    <button onclick="cmd('italic')"><i>I</i></button>
+    <button onclick="cmdColor('red')" style="color:red">A</button>
+    <button onclick="cmdHighlight()">HL</button>
+</div>
+
+<div id="chat"></div><br>
+
+<textarea id="input" style="width:600px;height:80px;"></textarea><br>
+<button onclick="send()">Send</button>
+<button onclick="summarize()">Summarize & Continue</button>
+
+</div>
+</div>
+
+<script>
+const API_KEY = "JynhdEDbqBKOgVyMpoh71wgYjr56Yuad";
+const API_URL = "https://api.mistral.ai/v1/chat/completions";
+
+var currentChatId = null;
+
+/* ---------------- LocalStorage ---------------- */
+
+function getChats() {
+    return JSON.parse(localStorage.getItem("mistral_chats") || "{}");
+}
+
+function setChats(obj) {
+    localStorage.setItem("mistral_chats", JSON.stringify(obj));
+}
+
+function refreshChatList() {
+    var list = document.getElementById("chatList");
+    list.innerHTML = "";
+    var chats = getChats();
+
+    for (var id in chats) {
+        var d = document.createElement("div");
+        d.className = "chat-item";
+        d.textContent = chats[id].name;
+        d.onclick = (function(cid) {
+            return function() { loadChat(cid); };
+        })(id);
+        list.appendChild(d);
+    }
+}
+
+function newChat() {
+    currentChatId = null;
+    document.getElementById("chat").innerHTML = "";
+    refreshChatList();
+}
+
+function saveChat() {
+    var name = prompt("Chat name?");
+    if (!name) return;
+
+    var chats = getChats();
+    var id = currentChatId || ("chat_" + Date.now());
+
+    chats[id] = {
+        name: name,
+        html: document.getElementById("chat").innerHTML,
+        timestamp: Date.now()
+    };
+
+    currentChatId = id;
+    setChats(chats);
+    refreshChatList();
+}
+
+function loadChat(id) {
+    var chats = getChats();
+    if (!chats[id]) return;
+    currentChatId = id;
+    document.getElementById("chat").innerHTML = chats[id].html;
+}
+
+function backupChats() {
+    var data = localStorage.getItem("mistral_chats");
+    var blob = new Blob([data], { type: "application/json" });
+    download(blob, "mistral_backup.json");
+}
+
+function restoreChats() {
+    var input = document.createElement("input");
+    input.type = "file";
+    input.onchange = function() {
+        var reader = new FileReader();
+        reader.onload = function() {
+            localStorage.setItem("mistral_chats", reader.result);
+            refreshChatList();
+        };
+        reader.readAsText(input.files[0]);
+    };
+    input.click();
+}
+
+/* ---------------- Export ---------------- */
+
+function exportChat() {
+    var html =
+        "<html><head><meta charset='UTF-8'><style>" +
+        document.querySelector("style").innerHTML +
+        "</style></head><body>" +
+        document.getElementById("chat").innerHTML +
+        "</body></html>";
+
+    download(new Blob([html], {type:"text/html"}), "chat_export.html");
+}
+
+function download(blob, name) {
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+}
+
+/* ---------------- Formatting ---------------- */
+
+function cmd(c) { document.execCommand(c,false,null); }
+function cmdColor(c) { document.execCommand("foreColor",false,c); }
+function cmdHighlight() {
+    document.execCommand("hiliteColor",false,"yellow") ||
+    document.execCommand("backColor",false,"yellow");
+}
+
+/* ---------------- Chat ---------------- */
+
+function send() {
+    var t = input.value.trim();
+    if (!t) return;
+    input.value = "";
+
+    var d = document.createElement("div");
+    d.className = "msg";
+    d.setAttribute("data-role","user");
+    d.contentEditable = true;
+    d.innerText = t;
+    chat.appendChild(d);
+
+    var msgs = buildChat();
+
+    fetch(API_URL,{
+        method:"POST",
+        headers:{
+            "Content-Type":"application/json",
+            "Authorization":"Bearer "+API_KEY
+        },
+        body:JSON.stringify({model:"mistral-small",messages:msgs})
+    })
+    .then(r=>r.json())
+    .then(d=>{
+        var a=document.createElement("div");
+        a.className="msg";
+        a.contentEditable=true;
+        a.innerHTML=marked.parse(d.choices[0].message.content);
+        chat.appendChild(a);
+    });
+}
+
+function buildChat() {
+    var arr = [];
+    var nodes = chat.children;
+    for (var i=0;i<nodes.length;i++) {
+        arr.push({
+            role: nodes[i].getAttribute("data-role")||"assistant",
+            content: nodes[i].innerText
+        });
+    }
+    return arr;
+}
+
+refreshChatList();
+</script>
+
+</body>
+</html>
