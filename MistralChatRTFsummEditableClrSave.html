@@ -74,6 +74,31 @@ body {
 .msg:focus {
     outline: 1px solid #666;
 }
+
+.user {
+    color: blue;
+    white-space: pre-wrap;
+}
+
+.ai {
+    color: green;
+}
+
+textarea {
+    width: 700px;
+    height: 90px;
+    resize: vertical;
+}
+
+button {
+    height: 32px;
+    margin-right: 6px;
+}
+
+select {
+    height: 32px;
+}
+
 </style>
 
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -105,12 +130,26 @@ body {
     <button onclick="cmd('bold')"><b>B</b></button>
     <button onclick="cmd('italic')"><i>I</i></button>
     <button onclick="cmdColor('red')" style="color:red">A</button>
+    <button onclick="cmdColor('blue')" style="color:blue;">A</button>
+    <button onclick="cmdColor('green')" style="color:green;">A</button>
     <button onclick="cmdHighlight()">HL</button>
+    <button onclick="cmd('removeFormat')">X</button>
+	
 </div>
 
 <div id="chat"></div><br>
+<br>
+Model:
+<select id="model">
+    <option value="mistral-small">mistral-small</option>
+    <option value="mistral-medium">mistral-medium</option>
+    <option value="mistral-large">mistral-large</option>
+</select>
 
-<textarea id="input" style="width:600px;height:80px;"></textarea><br>
+<br><br>
+
+<textarea id="input" placeholder="Type your prompt here&#10;Ctrl + Enter to send"></textarea>
+<br>
 <button onclick="send()">Send</button>
 <button onclick="summarize()">Summarize & Continue</button>
 
@@ -200,6 +239,41 @@ function restoreChats() {
     input.click();
 }
 
+//=========================================================================
+//   ADDED MISSING FUNCTIONS 
+/* ---- Conversation memory ---- */
+
+var systemMessage = {
+    role: "system",
+    content: "You are a helpful assistant. Continue the conversation using the full previous context."
+};
+
+var lastSentTokens = 0;
+var lastReceivedTokens = 0;
+
+function estimateTokens(text) {
+    return Math.ceil(text.length / 4);
+}
+
+function updateTokenDisplay(chatData) {
+    var total = 0;
+    for (var i = 0; i < chatData.length; i++) {
+        total += estimateTokens(chatData[i].content);
+    }
+    document.getElementById("tokens").textContent =
+        "Memory: " + total +
+        " | Sent: " + lastSentTokens +
+        " | Reply: " + lastReceivedTokens;
+}
+
+
+
+
+
+
+//=========================================================================
+
+
 /* ---------------- Export ---------------- */
 
 function exportChat() {
@@ -230,7 +304,7 @@ function cmdHighlight() {
 }
 
 /* ---------------- Chat ---------------- */
-
+/*
 function send() {
     var t = input.value.trim();
     if (!t) return;
@@ -274,6 +348,141 @@ function buildChat() {
     }
     return arr;
 }
+*/
+
+
+
+//==============================================
+
+/* ---- DOM-based chat handling ---- */
+
+function addUser(text) {
+    var d = document.createElement("div");
+    d.className = "msg user";
+    d.setAttribute("data-role", "user");
+    d.setAttribute("contenteditable", "true");
+    d.textContent = text;
+    document.getElementById("chat").appendChild(d);
+    scrollDown();
+}
+
+function addAI(markdown) {
+    var d = document.createElement("div");
+    d.className = "msg ai";
+    d.setAttribute("data-role", "assistant");
+    d.setAttribute("contenteditable", "true");
+    d.innerHTML = marked.parse(markdown);
+    document.getElementById("chat").appendChild(d);
+    scrollDown();
+
+    lastReceivedTokens = estimateTokens(markdown);
+}
+
+function scrollDown() {
+    var c = document.getElementById("chat");
+    c.scrollTop = c.scrollHeight;
+}
+
+/* ---- Build chatData from editable DOM ---- */
+
+function buildChatDataFromDOM() {
+    var nodes = document.getElementById("chat").children;
+    var data = [];
+
+    for (var i = 0; i < nodes.length; i++) {
+        var role = nodes[i].getAttribute("data-role");
+        var content = nodes[i].innerText.trim();
+        if (content) {
+            data.push({ role: role, content: content });
+        }
+    }
+    return data;
+}
+
+function send() {
+    var box = document.getElementById("input");
+    var msg = box.value.trim();
+    if (!msg) return;
+
+    box.value = "";
+    addUser(msg);
+
+    var chatData = buildChatDataFromDOM();
+    var payloadMessages = [systemMessage].concat(chatData);
+
+    lastSentTokens = estimateTokens(JSON.stringify(payloadMessages));
+    updateTokenDisplay(chatData);
+
+    fetch(API_URL, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + API_KEY
+        },
+        body: JSON.stringify({
+            model: document.getElementById("model").value,
+            messages: payloadMessages
+        })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+        addAI(d.choices[0].message.content);
+        updateTokenDisplay(buildChatDataFromDOM());
+    })
+    .catch(function() {
+        addAI("Error contacting Mistral API.");
+    });
+}
+
+/* ---- Summarize & Continue ---- */
+
+function summarize() {
+    var chatData = buildChatDataFromDOM();
+    if (chatData.length < 2) {
+        alert("Not enough conversation to summarize.");
+        return;
+    }
+
+    var summaryPrompt = {
+        role: "user",
+        content:
+            "Summarize the following conversation clearly and compactly, " +
+            "preserving all important facts, names, and conclusions:\n\n" +
+            JSON.stringify(chatData)
+    };
+
+    fetch(API_URL, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + API_KEY
+        },
+        body: JSON.stringify({
+            model: document.getElementById("model").value,
+            messages: [systemMessage, summaryPrompt]
+        })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+        document.getElementById("chat").innerHTML = "";
+        addAI("Conversation summary:\n\n" + d.choices[0].message.content);
+        updateTokenDisplay(buildChatDataFromDOM());
+    })
+    .catch(function() {
+        addAI("Error during summarization.");
+    });
+}
+
+/* Ctrl + Enter to send */
+document.getElementById("input").addEventListener("keydown", function(e) {
+    if (e.key === "Enter" && e.ctrlKey) {
+        send();
+        e.preventDefault();
+    }
+});
+
+//================================================
+
 
 refreshChatList();
 </script>
